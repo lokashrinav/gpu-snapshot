@@ -39,6 +39,50 @@ gcc gpu_snapshot.c -o gpu_snapshot -ldl
 go build -o signal_helper signal_helper.go
 ```
 
+## OCI Bundle Config
+
+The container needs `/dev` as tmpfs and explicit NVIDIA device entries:
+
+```json
+{
+  "ociVersion": "1.0.0",
+  "process": {
+    "user": {"uid": 0, "gid": 0},
+    "args": ["/bin/your_app"],
+    "env": ["PATH=/bin", "LD_LIBRARY_PATH=/lib64:/lib/x86_64-linux-gnu"],
+    "cwd": "/"
+  },
+  "root": {"path": "rootfs", "readonly": false},
+  "mounts": [
+    {"destination": "/proc", "type": "proc", "source": "proc"},
+    {"destination": "/dev", "type": "tmpfs", "source": "tmpfs"},
+    {"destination": "/sys", "type": "sysfs", "source": "sysfs",
+     "options": ["nosuid", "noexec", "nodev", "ro"]},
+    {"destination": "/tmp", "type": "tmpfs", "source": "none"}
+  ],
+  "linux": {
+    "namespaces": [
+      {"type": "pid"}, {"type": "ipc"}, {"type": "uts"}, {"type": "mount"},
+      {"type": "network", "path": "/var/run/netns/gvisor_ns"}
+    ],
+    "devices": [
+      {"path": "/dev/nvidia0", "type": "c", "major": 195, "minor": 0, "fileMode": 438},
+      {"path": "/dev/nvidia1", "type": "c", "major": 195, "minor": 1, "fileMode": 438},
+      {"path": "/dev/nvidiactl", "type": "c", "major": 195, "minor": 255, "fileMode": 438},
+      {"path": "/dev/nvidia-uvm", "type": "c", "major": 234, "minor": 0, "fileMode": 438},
+      {"path": "/dev/nvidia-uvm-tools", "type": "c", "major": 234, "minor": 1, "fileMode": 438}
+    ],
+    "resources": {"devices": [{"allow": true, "access": "rwm"}]}
+  }
+}
+```
+
+For NCCL, pre-configure a network namespace with loopback:
+```bash
+ip netns add gvisor_ns
+ip netns exec gvisor_ns ip link set lo up
+```
+
 ## Usage
 
 ```bash
@@ -46,7 +90,8 @@ go build -o signal_helper signal_helper.go
 nvidia-smi -pm 1
 
 # Start container
-runsc --nvproxy --nvproxy-driver-version=580.105.08 \
+runsc --nvproxy --nvproxy-driver-version=570.148.08 \
+    --rootless=false \
     run --bundle /path/to/bundle $CONTAINER_ID
 
 # Checkpoint (GPU state → host memory → disk, sentry exits)
@@ -57,7 +102,8 @@ runsc checkpoint \
     $CONTAINER_ID
 
 # Cold restore (new sentry, GPU state from host memory)
-runsc --nvproxy --nvproxy-driver-version=580.105.08 \
+runsc --nvproxy --nvproxy-driver-version=570.148.08 \
+    --rootless=false \
     restore \
     --image-path=/tmp/checkpoint \
     --bundle=/path/to/bundle \
@@ -110,14 +156,14 @@ signal.signal(signal.SIGUSR2, restore_handler)
 
 ## Test Results
 
-All verified on 2x H100 SXM5:
+All verified on 2x H100 SXM5 (80GB HBM3), driver 570.148.08:
 
-| Test | Sentry | Result |
-|------|--------|--------|
-| Single-GPU cold restore | NEW | restore=0, 0xBEEF1234 ✓ |
-| Multi-GPU cold restore | NEW | restore=0, 0xCAFE0000 + 0xCAFE0001 ✓ |
-| Multi-GPU + NCCL cold restore | NEW | restore=0, patterns + allreduce ✓ |
-| PyTorch model | Same | restore=0, tensors + model ✓ |
+| Test | Sentry | Checkpoint | Result |
+|------|--------|-----------|--------|
+| Single-GPU cold restore | NEW | 21MB | restore=0, `0xBEEF1234` verified 7+ ticks |
+| Multi-GPU cold restore (2x H100) | NEW | 36MB | restore=0, `0xCAFE0000` + `0xCAFE0001` verified 6+ ticks |
+| Multi-GPU + NCCL cold restore | NEW | 632MB | restore=0, NCCL allreduce verified |
+| PyTorch model | Same | - | restore=0, tensors + model verified |
 
 ## Requirements
 
