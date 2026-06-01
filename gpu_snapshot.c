@@ -6,8 +6,8 @@
  * checkpoint) to disk. On restore, the app reads GPU state from
  * its own host memory.
  *
- * Build: gcc gpu_snapshot.c -o gpu_snapshot -I/usr/local/cuda/include -ldl
- *        (needs CUDA toolkit headers installed)
+ * Build: gcc gpu_snapshot.c -o gpu_snapshot -I/usr/local/cuda/include -lcuda
+ *        (needs CUDA toolkit headers and driver 570+)
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -15,13 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
-#include <dlfcn.h>
 #include <cuda.h>
-
-static CUresult (*checkpoint_lock)(int, CUcheckpointLockArgs *);
-static CUresult (*checkpoint_checkpoint)(int, CUcheckpointCheckpointArgs *);
-static CUresult (*checkpoint_restore)(int, CUcheckpointRestoreArgs *);
-static CUresult (*checkpoint_unlock)(int, CUcheckpointUnlockArgs *);
 
 static volatile sig_atomic_t gpu_locked = 0;
 
@@ -30,12 +24,12 @@ void on_checkpoint(int sig) {
 
     CUcheckpointLockArgs lock_args;
     memset(&lock_args, 0, sizeof(lock_args));
-    CUresult r = checkpoint_lock(pid, &lock_args);
+    CUresult r = cuCheckpointProcessLock(pid, &lock_args);
     fprintf(stderr, "SAVE: lock=%d\n", r);
 
     CUcheckpointCheckpointArgs ckpt_args;
     memset(&ckpt_args, 0, sizeof(ckpt_args));
-    r = checkpoint_checkpoint(pid, &ckpt_args);
+    r = cuCheckpointProcessCheckpoint(pid, &ckpt_args);
     fprintf(stderr, "SAVE: checkpoint=%d\n", r);
 
     gpu_locked = 1;
@@ -50,13 +44,13 @@ void on_restore(int sig) {
     CUcheckpointRestoreArgs restore_args;
     memset(&restore_args, 0, sizeof(restore_args));
     fprintf(stderr, "RESTORE: restore(%d)\n", pid);
-    CUresult r = checkpoint_restore(pid, &restore_args);
+    CUresult r = cuCheckpointProcessRestore(pid, &restore_args);
     fprintf(stderr, "RESTORE: restore=%d\n", r);
 
     if (r == CUDA_SUCCESS) {
         CUcheckpointUnlockArgs unlock_args;
         memset(&unlock_args, 0, sizeof(unlock_args));
-        r = checkpoint_unlock(pid, &unlock_args);
+        r = cuCheckpointProcessUnlock(pid, &unlock_args);
         fprintf(stderr, "RESTORE: unlock=%d\n", r);
     } else {
         fprintf(stderr, "RESTORE: FAILED=%d\n", r);
@@ -68,29 +62,7 @@ void on_restore(int sig) {
     if (f) { fprintf(f, "0\n"); fclose(f); }
 }
 
-int load_checkpoint_api(void) {
-    void *h = dlopen("libcuda.so.1", RTLD_NOW);
-    if (!h) {
-        fprintf(stderr, "dlopen libcuda.so.1: %s\n", dlerror());
-        return -1;
-    }
-    checkpoint_lock = dlsym(h, "cuCheckpointProcessLock");
-    checkpoint_checkpoint = dlsym(h, "cuCheckpointProcessCheckpoint");
-    checkpoint_restore = dlsym(h, "cuCheckpointProcessRestore");
-    checkpoint_unlock = dlsym(h, "cuCheckpointProcessUnlock");
-    if (!checkpoint_lock || !checkpoint_checkpoint ||
-        !checkpoint_restore || !checkpoint_unlock) {
-        fprintf(stderr, "cuda-checkpoint symbols not found (need driver 570+)\n");
-        return -1;
-    }
-    return 0;
-}
-
 void install_checkpoint_handlers(void) {
-    if (load_checkpoint_api() != 0) {
-        fprintf(stderr, "WARNING: cuda-checkpoint not available\n");
-        return;
-    }
     signal(SIGUSR1, on_checkpoint);
     signal(SIGUSR2, on_restore);
 }
