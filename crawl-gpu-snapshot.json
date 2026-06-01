@@ -1,0 +1,10 @@
+{
+  "topic": "cuda-checkpoint GPU snapshots gVisor nvproxy NCCL checkpoint restore",
+  "seeds": [
+    "https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__CHECKPOINT.html",
+    "https://github.com/NVIDIA/cuda-checkpoint"
+  ],
+  "output": "docs/gpu-snapshot",
+  "budget": 100,
+  "delay": 1.0
+}

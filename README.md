@@ -32,8 +32,8 @@ That's it. Two files.
 ## Build
 
 ```bash
-# App (or link gpu_snapshot.c into your own app)
-gcc gpu_snapshot.c -o gpu_snapshot -ldl
+# App (needs CUDA toolkit headers)
+gcc gpu_snapshot.c -o gpu_snapshot -I/usr/local/cuda/include -ldl
 
 # Helper binary (goes inside the container)
 go build -o signal_helper signal_helper.go
