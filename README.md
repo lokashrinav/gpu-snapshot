@@ -29,14 +29,25 @@ The app calls NVIDIA's cuda-checkpoint API on itself via signal handlers:
 
 That's it. Two files.
 
-## Build
+## Quick Start
+
+```bash
+# On a machine with NVIDIA GPUs, CUDA toolkit, Go, and gcc:
+./setup.sh build        # compiles everything, creates OCI bundle
+./setup.sh run &        # starts the container
+# wait for "READY" in output
+./setup.sh checkpoint   # saves container to disk, sentry exits
+./setup.sh restore      # cold restore on new sentry, app continues
+```
+
+## Manual Build
 
 ```bash
 # App (needs CUDA toolkit headers and driver 570+)
 gcc gpu_snapshot.c -o gpu_snapshot -I/usr/local/cuda/include -lcuda
 
 # Helper binary (goes inside the container)
-go build -o signal_helper signal_helper.go
+CGO_ENABLED=0 go build -o signal_helper signal_helper.go
 ```
 
 ## OCI Bundle Config
