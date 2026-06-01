@@ -24,10 +24,10 @@ The app calls NVIDIA's cuda-checkpoint API on itself via signal handlers:
 
 | File | Purpose |
 |------|---------|
-| `gpu_snapshot.c` | The complete solution — signal handlers + example app |
+| `gpu_snapshot.c` | The solution — signal handlers + example app |
 | `signal_helper.go` | gVisor save-restore-exec helper (sends signals to the app) |
-
-That's it. Two files.
+| `setup.sh` | Build, run, checkpoint, restore — all automated |
+| `RESEARCH.md` | Full research log — every experiment, every finding |
 
 ## Quick Start
 
@@ -126,9 +126,10 @@ runsc --nvproxy --nvproxy-driver-version=570.148.08 \
 Add these three things to your application:
 
 ```c
-#include "gpu_snapshot.h"  // or inline the functions
+#include <cuda.h>
+#include <signal.h>
 
-// 1. At startup:
+// 1. At startup, register the signal handlers:
 install_checkpoint_handlers();
 
 // 2. In your main loop, skip GPU work while locked:
@@ -144,21 +145,37 @@ import signal, ctypes, os
 
 libcuda = ctypes.CDLL("libcuda.so.1")
 
-class Args(ctypes.Structure):
-    _fields_ = [("data", ctypes.c_char * 64)]
+class LockArgs(ctypes.Structure):
+    _fields_ = [("reserved0", ctypes.c_uint),
+                ("reserved1", ctypes.c_uint64 * 7),
+                ("timeoutMs", ctypes.c_uint)]
+
+class CheckpointArgs(ctypes.Structure):
+    _fields_ = [("reserved", ctypes.c_uint64 * 8)]
+
+class RestoreArgs(ctypes.Structure):
+    _fields_ = [("gpuPairs", ctypes.c_void_p),
+                ("gpuPairsCount", ctypes.c_uint),
+                ("reserved", ctypes.c_char * 44),
+                ("reserved1", ctypes.c_uint64)]
+
+class UnlockArgs(ctypes.Structure):
+    _fields_ = [("reserved", ctypes.c_uint64 * 8)]
 
 def checkpoint_handler(signum, frame):
-    args = Args()
-    libcuda.cuCheckpointProcessLock(os.getpid(), ctypes.byref(args))
-    args = Args()
-    libcuda.cuCheckpointProcessCheckpoint(os.getpid(), ctypes.byref(args))
+    pid = os.getpid()
+    lock_args = LockArgs()
+    libcuda.cuCheckpointProcessLock(pid, ctypes.byref(lock_args))
+    ckpt_args = CheckpointArgs()
+    libcuda.cuCheckpointProcessCheckpoint(pid, ctypes.byref(ckpt_args))
     with open("/tmp/.gpu_ckpt_done", "w") as f: f.write("0\n")
 
 def restore_handler(signum, frame):
-    args = Args()
-    libcuda.cuCheckpointProcessRestore(os.getpid(), ctypes.byref(args))
-    args = Args()
-    libcuda.cuCheckpointProcessUnlock(os.getpid(), ctypes.byref(args))
+    pid = os.getpid()
+    restore_args = RestoreArgs()
+    libcuda.cuCheckpointProcessRestore(pid, ctypes.byref(restore_args))
+    unlock_args = UnlockArgs()
+    libcuda.cuCheckpointProcessUnlock(pid, ctypes.byref(unlock_args))
     with open("/tmp/.gpu_ckpt_done", "w") as f: f.write("0\n")
 
 signal.signal(signal.SIGUSR1, checkpoint_handler)
